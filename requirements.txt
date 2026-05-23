@@ -1,0 +1,10 @@
+streamlit
+langgraph
+langchain_openai
+yfinance
+requests
+python-dotenv
+huggingface_hub
+google-search-results
+pandas
+numpy
