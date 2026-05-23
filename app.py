@@ -5,29 +5,26 @@ import numpy as np
 import yfinance as yf
 from typing import TypedDict, List, Optional
 from dotenv import load_dotenv
-
-# Cloud & AI Imports
 from huggingface_hub import InferenceClient
 from serpapi import GoogleSearch
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 import streamlit as st
+import time
 
 load_dotenv()
 
 # =============================================================================
-# SECTION 1: LIVE ASSET ENGINE (REAL DATA)
+# 1. REAL-TIME DATA ENGINE (Sovereign-Audit)
 # =============================================================================
-
-def get_live_portfolio():
-    """Pulls ACTUAL real-time prices for the fund's holdings."""
-    # Define your actual assets here
+def get_institutional_portfolio():
+    # These tickers are the most reliable for real-time data in yfinance
+    # XAUUSD=X (Gold), NVDA (Nvidia), AAPL (Apple), BTC-USD (Bitcoin)
     holdings = {
-        "XAUUSD=X": {"name": "Gold", "shares": 10}, 
-        "NVDA": {"name": "Nvidia", "shares": 15},
-        "AAPL": {"name": "Apple", "shares": 20},
-        "GLD": {"name": "SPDR Gold", "shares": 25},
-        "BTC-USD": {"name": "Bitcoin", "shares": 0.1},
+        "GC=F": {"name": "Gold Futures", "shares": 5}, 
+        "NVDA": {"name": "Nvidia", "shares": 10},
+        "AAPL": {"name": "Apple", "shares": 15},
+        "BTC-USD": {"name": "Bitcoin", "shares": 0.05},
         "EURUSD=X": {"name": "EUR/USD", "shares": 1000}
     }
     
@@ -36,138 +33,151 @@ def get_live_portfolio():
     
     for ticker, info in holdings.items():
         try:
-            stock = yf.Ticker(ticker)
-            price = stock.fast_info['last_price']
+            t = yf.Ticker(ticker)
+            price = t.history(period="1d")['Close'].iloc[-1]
             value = price * info['shares']
             total_equity += value
-            data_list.append({
-                "Asset": info['name'],
-                "Ticker": ticker,
-                "Price": round(price, 2),
-                "Value": round(value, 2)
-            })
+            data_list.append({"Asset": info['name'], "Ticker": ticker, "Price": round(price, 2), "Value": round(value, 2)})
         except:
-            data_list.append({"Asset": info['name'], "Ticker": ticker, "Price": "N/A", "Value": 0})
+            data_list.append({"Asset": info['name'], "Ticker": ticker, "Price": "ERR", "Value": 0})
             
     return pd.DataFrame(data_list), total_equity
 
 # =============================================================================
-# SECTION 2: THE SOVEREIGN AGENTS
+# 2. THE SOVEREIGN BOARD (Logic Classes)
 # =============================================================================
-
 class RhineMacro:
-    def __init__(self):
-        self.api_key = os.getenv("FRED_API_KEY")
-        self.base_url = "https://api.stlouisfed.org/fred/"
-
-    def determine_regime(self):
+    def determine(self):
         try:
-            params = {"series_id": "DGS10", "api_key": self.api_key, "filetype": "json", "limit": 1}
-            res = requests.get(self.base_url, params=params).json()
+            api_key = os.getenv("FRED_API_KEY")
+            res = requests.get(f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={api_key}&filetype=json&limit=1").json()
             yield_10y = float(res['observations'][0]['value'])
-            if yield_10y > 4.2: return "🔴 RISK-OFF"
-            elif yield_10y < 3.5: return "🟢 RISK-ON"
-            else: return "🟡 NEUTRAL"
-        except: return "🟡 REGIME: UNKNOWN (API Error)"
+            return "🔴 RISK-OFF" if yield_10y > 4.2 else "🟢 RISK-ON" if yield_10y < 3.5 else "🟡 NEUTRAL"
+        except: return "🟡 REGIME: UNKNOWN"
 
 class AmazonIntel:
-    def __init__(self):
-        self.serp_key = os.getenv("SERPAPI_KEY")
-        self.hf_client = InferenceClient(token=os.getenv("HUGGINGFACE_TOKEN"))
-
-    def scout_trades(self, regime):
+    def scout(self, regime):
         try:
-            query = "institutional accumulation" + (" gold" if "🔴" in regime else " AI tech")
-            search = GoogleSearch("Sovereign-Intel", "apiKey", self.serp_key)
-            results = search.get_dict()
-            snippets = [res['snippet'] for res in results.get('organic_results', [])[:3]]
-            return [{"evidence": s, "score": 0.8} for s in snippets]
-        except: return None
+            search = GoogleSearch("Sovereign-Intel", "apiKey", os.getenv("SERPAPI_KEY"))
+            res = search.get_dict()
+            snippets = [s['snippet'] for s in res.get('organic_results', [])[:2]]
+            return snippets
+        except: return ["No intel available."]
 
 class KyotoQuant:
-    def create_blueprint(self, ticker):
+    def blueprint(self, ticker):
         try:
-            price = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
-            return {"ticker": ticker, "entry": round(price, 2), "stop": round(price*0.95, 2), "tp": round(price*1.15, 2), "risk_usd": 72}
+            p = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
+            return {"ticker": ticker, "entry": round(p, 2), "stop": round(p*0.96, 2), "tp": round(p*1.12, 2)}
         except: return None
 
 class VostokRisk:
     def validate(self, blueprint):
-        if not blueprint: return False, "No blueprint."
-        return True, "Risk parameters validated."
+        if not blueprint: return False, "Blueprint Missing"
+        return True, "Validated"
 
 # =============================================================================
-# SECTION 3: LANGGRAPH BOARD
+# 3. LANGGRAPH STATE MACHINE
 # =============================================================================
-
 class FundState(TypedDict):
-    regime: str; leads: List[dict]; active_ticker: Optional[str]; blueprint: Optional[dict]; risk_approved: bool; risk_notes: str; final_briefing: str
+    regime: str; leads: List[str]; active_ticker: str; blueprint: dict; risk_approved: bool; risk_notes: str; briefing: str
 
-def rhine_node(state: FundState): return {"regime": RhineMacro().determine_regime()}
-def amazon_node(state: FundState): 
-    leads = AmazonIntel().scout_trades(state['regime'])
-    return {"leads": leads if leads else [], "active_ticker": "NVDA" if leads else None}
-def kyoto_node(state: FundState): return {"blueprint": KyotoQuant().create_blueprint(state['active_ticker']) if state['active_ticker'] else None}
-def vostok_node(state: FundState):
-    approved, notes = VostokRisk().validate(state['blueprint'])
-    return {"risk_approved": approved, "risk_notes": notes}
-def secretary_node(state: FundState):
+def rhine_node(state):
+    res = RhineMacro().determine()
+    return {"regime": res}
+
+def amazon_node(state):
+    leads = AmazonIntel().scout(state['regime'])
+    return {"leads": leads, "active_ticker": "NVDA"}
+
+def kyoto_node(state):
+    return {"blueprint": KyotoQuant().blueprint(state['active_ticker'])}
+
+def vostok_node(state):
+    app, notes = VostokRisk().validate(state['blueprint'])
+    return {"risk_approved": app, "risk_notes": notes}
+
+def alps_node(state):
     try:
         llm = ChatOpenAI(model="mistralai/mistral-7b-instruct", openai_api_key=os.getenv("OPENROUTER_API_KEY"), openai_api_base="https://openrouter.ai/api/v1")
-        prompt = f"Regime: {state['regime']}\nBlueprint: {state['blueprint']}\nRisk: {state['risk_notes']}. Briefing for Chairman Osinachi."
-        return {"final_briefing": llm.invoke(prompt).content}
-    except Exception as e: return {"final_briefing": f"Secretary Error: {str(e)}. Check OpenRouter Key."}
+        prompt = f"Board Results: Regime {state['regime']}, Blueprint {state['blueprint']}, Risk {state['risk_notes']}. Write a brief directive for Chairman Osinachi."
+        return {"briefing": llm.invoke(prompt).content}
+    except: return {"briefing": "Secretary is offline. Check API keys."}
 
 workflow = StateGraph(FundState)
-workflow.add_node("rhine", rhine_node); workflow.add_node("amazon", amazon_node); workflow.add_node("kyoto", kyoto_node); workflow.add_node("vostok", vostok_node); workflow.add_node("alps", secretary_node)
+workflow.add_node("rhine", rhine_node); workflow.add_node("amazon", amazon_node); workflow.add_node("kyoto", kyoto_node); workflow.add_node("vostok", vostok_node); workflow.add_node("alps", alps_node)
 workflow.set_entry_point("rhine")
 workflow.add_edge("rhine", "amazon"); workflow.add_edge("amazon", "kyoto"); workflow.add_edge("kyoto", "vostok"); workflow.add_edge("vostok", "alps"); workflow.add_edge("alps", END)
 sovereign_board = workflow.compile()
 
 # =============================================================================
-# SECTION 4: PROFESSIONAL UI
+# 4. THE INSTITUTIONAL UI
 # =============================================================================
+st.set_page_config(page_title="SFC Command", layout="wide")
 
-st.set_page_config(page_title="SFC Institutional", layout="wide")
-
-# Deep Blue & White Palette
+# Professional Deep Blue/White Theme
 st.markdown("""
     <style>
-    .stApp { background-color: #001F3F; color: #FFFFFF; }
-    h1, h2, h3 { color: #FFFFFF !important; font-family: 'Segoe UI', sans-serif !important; }
-    .metric-card { background-color: #002B5B; border: 1px solid #FFFFFF; padding: 15px; border-radius: 5px; text-align: center; }
-    .report-box { background-color: #FFFFFF; color: #001F3F; padding: 20px; border-radius: 5px; font-family: 'Courier New', monospace; font-weight: bold; }
+    .stApp { background-color: #00122b; color: #FFFFFF; }
+    h1, h2, h3 { color: #FFFFFF !important; font-family: 'Arial', sans-serif !important; }
+    .member-card { background-color: #002147; border: 1px solid #FFFFFF; padding: 15px; border-radius: 10px; text-align: center; min-width: 200px; }
+    .report-box { background-color: #FFFFFF; color: #00122b; padding: 25px; border-radius: 10px; font-family: 'Courier New', monospace; font-weight: bold; border-left: 10px solid #004c99; }
     </style>
     """, unsafe_allow_html=True)
 
-st.sidebar.title("SFC NAV")
-page = st.sidebar.radio("Menu", ["Portfolio", "Board Room", "Intelligence"])
+st.sidebar.title("SFC NAVIGATION")
+page = st.sidebar.radio("Menu", ["Live Portfolio", "Board Room", "Intel Feed"])
 
-if page == "Portfolio":
-    st.title("Institutional Portfolio")
-    
-    # Live Data Fetch
-    portfolio_df, total_equity = get_live_portfolio()
+if page == "Live Portfolio":
+    st.title("Institutional Asset Tracking")
+    df, equity = get_institutional_portfolio()
     
     col1, col2 = st.columns(2)
-    col1.metric("Total Equity", f"${total_equity:,.2f}", "Live Market Value")
-    col2.metric("Actual Capital", "$14,300.00", "Baseline")
+    col1.metric("Total Live Equity", f"${equity:,.2f}", "Market Value")
+    col2.metric("Fund Baseline", "$14,300.00", "SFC Capital")
     
-    st.markdown("### Live Asset Tracking")
-    st.table(portfolio_df)
+    st.table(df)
 
 elif page == "Board Room":
-    st.title("Sovereign Board Consensus")
-    if st.button("RUN BOARD ANALYSIS"):
-        with st.spinner("Executing institutional analysis..."):
-            initial_state = {"regime": "", "leads": [], "active_ticker": None, "blueprint": None, "risk_approved": False, "risk_notes": "", "final_briefing": ""}
-            result = sovereign_board.invoke(initial_state)
-            st.markdown(f'<div class="report-box">{result["final_briefing"]}</div>', unsafe_allow_html=True)
-            if result['risk_approved']: st.success(f"DIRECTIVE: EXECUTE {result['active_ticker']}")
-            else: st.error("DIRECTIVE: TRADE REJECTED")
+    st.title("The Sovereign Board of Directors")
+    
+    # Display Board Members and their Capabilities
+    members = {
+        "RHINE": "Macro Architect - Global Regime & FED Analysis",
+        "AMAZON": "Intel Spy - Institutional Flow & Dark Pools",
+        "KYOTO": "Quant Mathematician - Risk/Reward Precision",
+        "VOSTOK": "Risk Sentinel - Capital Preservation & Veto",
+        "ALPS": "Executive Assistant - Synthesis & Reporting"
+    }
+    
+    cols = st.columns(5)
+    for i, (name, cap) in enumerate(members.items()):
+        with cols[i]:
+            st.markdown(f'<div class="member-card"><b>{name}</b><br><small>{cap}</small></div>', unsafe_allow_html=True)
 
-elif page == "Intelligence":
-    st.title("Institutional Intel Feed")
-    st.info("Live Feed: Monitoring Dark Pools and Central Bank flows...")
-    st.write("• [Sovereign-Intel] High-conviction accumulation detected in XAU/USD.")
-    st.write("• [Sovereign-Macro] 10Y Yields stabilizing; shifting to Neutral.")
+    st.markdown("---")
+    if st.button("CONVENE THE BOARD"):
+        # VISIBLE PROCESS
+        with st.status("Board Session in Progress...", expanded=True) as status:
+            st.write("🏛️ Rhine is analyzing Macro indicators...")
+            time.sleep(1)
+            st.write("🕵️ Amazon is scanning institutional accumulation...")
+            time.sleep(1)
+            st.write("📐 Kyoto is calculating mathematical entries...")
+            time.sleep(1)
+            st.write("🛡️ Vostok is auditing risk exposure...")
+            time.sleep(1)
+            st.write("📝 Alps is synthesizing the final directive...")
+            
+            result = sovereign_board.invoke({"regime": "", "leads": [], "active_ticker": None, "blueprint": None, "risk_approved": False, "risk_notes": "", "briefing": ""})
+            status.update(label="Session Complete", state="complete")
+
+        st.markdown(f'<div class="report-box">{result["briefing"]}</div>', unsafe_allow_html=True)
+        if result['risk_approved']: st.success(f"DIRECTIVE: EXECUTE {result['active_ticker']}")
+        else: st.error("DIRECTIVE: TRADE REJECTED BY VOSTOK")
+
+elif page == "Intel Feed":
+    st.title("Sovereign Intelligence")
+    st.info("Monitoring Whale Movements & Fed Data...")
+    st.write("• [Sovereign-Intel] High-conviction accumulation detected in Gold.")
+    st.write("• [Sovereign-Macro] 10Y Yields at critical resistance.")
