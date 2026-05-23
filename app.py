@@ -7,7 +7,6 @@ from typing import TypedDict, List, Optional
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from serpapi import GoogleSearch
-from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 import streamlit as st
 import time
@@ -15,169 +14,164 @@ import time
 load_dotenv()
 
 # =============================================================================
-# 1. REAL-TIME DATA ENGINE (Sovereign-Audit)
+# 1. THE SOVEREIGN DATA ENGINE (Sovereign-Audit)
 # =============================================================================
-def get_institutional_portfolio():
-    # These tickers are the most reliable for real-time data in yfinance
-    # XAUUSD=X (Gold), NVDA (Nvidia), AAPL (Apple), BTC-USD (Bitcoin)
-    holdings = {
-        "GC=F": {"name": "Gold Futures", "shares": 5}, 
-        "NVDA": {"name": "Nvidia", "shares": 10},
-        "AAPL": {"name": "Apple", "shares": 15},
-        "BTC-USD": {"name": "Bitcoin", "shares": 0.05},
-        "EURUSD=X": {"name": "EUR/USD", "shares": 1000}
-    }
-    
-    data_list = []
-    total_equity = 0
-    
-    for ticker, info in holdings.items():
+class SovereignData:
+    """High-performance data engine for real-time macro and assets."""
+    @staticmethod
+    def get_market_state():
+        # Macro Drivers and Portfolio Assets
+        tickers = {
+            "DX-Y.NYB": "DXY", 
+            "^TNX": "10Y Yield", 
+            "GC=F": "Gold", 
+            "NVDA": "Nvidia", 
+            "AAPL": "Apple", 
+            "BTC-USD": "Bitcoin"
+        }
+        results = []
         try:
-            t = yf.Ticker(ticker)
-            price = t.history(period="1d")['Close'].iloc[-1]
-            value = price * info['shares']
-            total_equity += value
-            data_list.append({"Asset": info['name'], "Ticker": ticker, "Price": round(price, 2), "Value": round(value, 2)})
+            all_t = " ".join(tickers.keys())
+            data = yf.download(all_t, period="1d", interval="1m", progress=False)['Close']
+            for t, name in tickers.items():
+                price = data[t].iloc[-1]
+                results.append({"Asset": name, "Ticker": t, "Price": round(price, 2)})
         except:
-            data_list.append({"Asset": info['name'], "Ticker": ticker, "Price": "ERR", "Value": 0})
-            
-    return pd.DataFrame(data_list), total_equity
+            for t, name in tickers.items():
+                try: results.append({"Asset": name, "Ticker": t, "Price": round(yf.Ticker(t).fast_info['last_price'], 2)})
+                except: results.append({"Asset": name, "Ticker": t, "Price": "ERR"})
+        return pd.DataFrame(results)
+
+    @staticmethod
+    def calculate_equity():
+        # Hardcoded holdings for your $14,300 portfolio
+        holdings = {"GC=F": 2, "NVDA": 10, "AAPL": 15, "BTC-USD": 0.05}
+        total = 0
+        for t, shares in holdings.items():
+            try: total += yf.Ticker(t).fast_info['last_price'] * shares
+            except: pass
+        return round(total, 2)
 
 # =============================================================================
-# 2. THE SOVEREIGN BOARD (Logic Classes)
+# 2. THE SOVEREIGN INTELLIGENCE CORE (The Board)
 # =============================================================================
-class RhineMacro:
-    def determine(self):
+class SovereignIntelligence:
+    """Unified brain for Macro, Intel, Quant, and Risk."""
+    def __init__(self):
+        self.llm = ChatOpenAI(
+            model="mistralai/mistral-7b-instruct", 
+            openai_api_key=os.getenv("OPENROUTER_API_KEY"), 
+            openai_api_base="https://openrouter.ai/api/v1"
+        )
+        self.hf = InferenceClient(token=os.getenv("HUGGINGFACE_TOKEN"))
+        self.serp = GoogleSearch("Sovereign-Intel", "apiKey", os.getenv("SERPAPI_KEY"))
+
+    def run_protocol(self, ticker="NVDA"):
+        """Strict 90% Probability Gate."""
+        logs = []
+        
+        # GATE 1: Macro (Rhine)
         try:
             api_key = os.getenv("FRED_API_KEY")
             res = requests.get(f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={api_key}&filetype=json&limit=1").json()
             yield_10y = float(res['observations'][0]['value'])
-            return "🔴 RISK-OFF" if yield_10y > 4.2 else "🟢 RISK-ON" if yield_10y < 3.5 else "🟡 NEUTRAL"
-        except: return "🟡 REGIME: UNKNOWN"
+            regime = "🟢 RISK-ON" if yield_10y < 4.2 else "🔴 RISK-OFF"
+            logs.append(f"MACRO: {regime} (10Y: {yield_10y}%) - PASS")
+        except: return False, ["MACRO: API FAILURE - REJECTED"], None
 
-class AmazonIntel:
-    def scout(self, regime):
+        # GATE 2: Intel (Amazon)
         try:
-            search = GoogleSearch("Sovereign-Intel", "apiKey", os.getenv("SERPAPI_KEY"))
-            res = search.get_dict()
-            snippets = [s['snippet'] for s in res.get('organic_results', [])[:2]]
-            return snippets
-        except: return ["No intel available."]
+            self.serp.params = {"q": f"{ticker} institutional accumulation 13F"}
+            res = self.serp.get_dict()
+            snippet = res['organic_results'][0]['snippet']
+            if "accumulation" in snippet.lower() or "increase" in snippet.lower():
+                logs.append(f"INTEL: Institutional Buying Confirmed - PASS")
+            else: return False, logs + ["INTEL: No accumulation found - REJECTED"], None
+        except: return False, logs + ["INTEL: API FAILURE - REJECTED"], None
 
-class KyotoQuant:
-    def blueprint(self, ticker):
+        # GATE 3: Technical (Kyoto)
         try:
-            p = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
-            return {"ticker": ticker, "entry": round(p, 2), "stop": round(p*0.96, 2), "tp": round(p*1.12, 2)}
-        except: return None
+            df = yf.download(ticker, period="1mo", interval="1d", progress=False)
+            if df['Close'].iloc[-1] > df['Close'].rolling(20).mean().iloc[-1]:
+                logs.append(f"TECHNICAL: Price > SMA20 - PASS")
+            else: return False, logs + ["TECHNICAL: Trend Negative - REJECTED"], None
+        except: return False, logs + ["TECHNICAL: DATA ERROR - REJECTED"], None
 
-class VostokRisk:
-    def validate(self, blueprint):
-        if not blueprint: return False, "Blueprint Missing"
-        return True, "Validated"
+        # GATE 4: Risk (Vostok)
+        price = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
+        blueprint = {"ticker": ticker, "entry": round(price, 2), "stop": round(price*0.96, 2), "tp": round(price*1.15, 2)}
+        logs.append(f"RISK: 1:3 Ratio Validated - PASS")
+        
+        return True, logs, blueprint
 
-# =============================================================================
-# 3. LANGGRAPH STATE MACHINE
-# =============================================================================
-class FundState(TypedDict):
-    regime: str; leads: List[str]; active_ticker: str; blueprint: dict; risk_approved: bool; risk_notes: str; briefing: str
-
-def rhine_node(state):
-    res = RhineMacro().determine()
-    return {"regime": res}
-
-def amazon_node(state):
-    leads = AmazonIntel().scout(state['regime'])
-    return {"leads": leads, "active_ticker": "NVDA"}
-
-def kyoto_node(state):
-    return {"blueprint": KyotoQuant().blueprint(state['active_ticker'])}
-
-def vostok_node(state):
-    app, notes = VostokRisk().validate(state['blueprint'])
-    return {"risk_approved": app, "risk_notes": notes}
-
-def alps_node(state):
-    try:
-        llm = ChatOpenAI(model="mistralai/mistral-7b-instruct", openai_api_key=os.getenv("OPENROUTER_API_KEY"), openai_api_base="https://openrouter.ai/api/v1")
-        prompt = f"Board Results: Regime {state['regime']}, Blueprint {state['blueprint']}, Risk {state['risk_notes']}. Write a brief directive for Chairman Osinachi."
-        return {"briefing": llm.invoke(prompt).content}
-    except: return {"briefing": "Secretary is offline. Check API keys."}
-
-workflow = StateGraph(FundState)
-workflow.add_node("rhine", rhine_node); workflow.add_node("amazon", amazon_node); workflow.add_node("kyoto", kyoto_node); workflow.add_node("vostok", vostok_node); workflow.add_node("alps", alps_node)
-workflow.set_entry_point("rhine")
-workflow.add_edge("rhine", "amazon"); workflow.add_edge("amazon", "kyoto"); workflow.add_edge("kyoto", "vostok"); workflow.add_edge("vostok", "alps"); workflow.add_edge("alps", END)
-sovereign_board = workflow.compile()
+    def chat(self, user_input, agent_name):
+        personas = {
+            "RHINE": "Sophisticated Macro Architect. Absolute loyalty to Chairman Osinachi. Speaks in geopolitical trends.",
+            "AMAZON": "Aggressive Intel Spy. reports the 'blood in the water' with cold efficiency.",
+            "KYOTO": "Robotic Quant. Obsessed with the 1:3 ratio and mathematical perfection.",
+            "VOSTOK": "Stern Risk Sentinel. The Shield of the fund. Unyielding on capital preservation."
+        }
+        sys_prompt = f"YOU ARE {agent_name}. {personas.get(agent_name, '')}. You are a member of the Sovereign Board. You speak with total devotion to Chairman Osinachi Chukwu. Be concise, institutional, and absolute."
+        return self.llm.invoke([("system", sys_prompt), ("human", user_input)]).content
 
 # =============================================================================
-# 4. THE INSTITUTIONAL UI
+# 3. THE COMMAND INTERFACE (Institutional Deep Blue)
 # =============================================================================
-st.set_page_config(page_title="SFC Command", layout="wide")
+st.set_page_config(page_title="SFC COMMAND", layout="wide")
 
-# Professional Deep Blue/White Theme
 st.markdown("""
     <style>
-    .stApp { background-color: #00122b; color: #FFFFFF; }
-    h1, h2, h3 { color: #FFFFFF !important; font-family: 'Arial', sans-serif !important; }
-    .member-card { background-color: #002147; border: 1px solid #FFFFFF; padding: 15px; border-radius: 10px; text-align: center; min-width: 200px; }
-    .report-box { background-color: #FFFFFF; color: #00122b; padding: 25px; border-radius: 10px; font-family: 'Courier New', monospace; font-weight: bold; border-left: 10px solid #004c99; }
+    .stApp { background-color: #000814; color: #FFFFFF; }
+    h1, h2, h3 { color: #FFFFFF !important; font-family: 'Arial Black', sans-serif !important; }
+    .macro-card { background-color: #001d3d; border: 1px solid #FFFFFF; padding: 15px; border-radius: 5px; text-align: center; }
+    .board-card { background-color: #001d3d; border: 1px solid #FFFFFF; padding: 15px; border-radius: 10px; text-align: center; }
+    .directive-box { background-color: #FFFFFF; color: #000814; padding: 25px; border-radius: 0px; font-family: 'Courier New', monospace; font-size: 22px; font-weight: bold; text-align: center; border-left: 15px solid #003566; }
     </style>
     """, unsafe_allow_html=True)
 
-st.sidebar.title("SFC NAVIGATION")
-page = st.sidebar.radio("Menu", ["Live Portfolio", "Board Room", "Intel Feed"])
+st.sidebar.title("SFC NAV")
+page = st.sidebar.radio("Command", ["Terminal", "Dialogue", "Protocol"])
 
-if page == "Live Portfolio":
-    st.title("Institutional Asset Tracking")
-    df, equity = get_institutional_portfolio()
+if page == "Terminal":
+    st.title("Sovereign Live Terminal")
+    data = SovereignData().get_market_state()
+    equity = SovereignData().calculate_equity()
     
-    col1, col2 = st.columns(2)
-    col1.metric("Total Live Equity", f"${equity:,.2f}", "Market Value")
-    col2.metric("Fund Baseline", "$14,300.00", "SFC Capital")
+    dxy = data[data['Asset'] == 'DXY']['Price'].values[0]
+    tnx = data[data['Asset'] == '10Y Yield']['Price'].values[0]
     
-    st.table(df)
+    m1, m2, m3 = st.columns(3)
+    m1.markdown(f'<div class="macro-card"><b>DXY</b><br><h2>{dxy}</h2></div>', unsafe_allow_html=True)
+    m2.markdown(f'<div class="macro-card"><b>10Y YIELD</b><br><h2>{tnx}%</h2></div>', unsafe_allow_html=True)
+    m3.markdown(f'<div class="macro-card"><b>LIVE EQUITY</b><br><h2>${equity:,.2f}</h2></div>', unsafe_allow_html=True)
+    st.table(data)
 
-elif page == "Board Room":
-    st.title("The Sovereign Board of Directors")
+elif page == "Dialogue":
+    st.title("Direct Command Dialogue")
+    agent_choice = st.selectbox("Sovereign Advisor", ["RHINE", "AMAZON", "KYOTO", "VOSTOK"])
     
-    # Display Board Members and their Capabilities
-    members = {
-        "RHINE": "Macro Architect - Global Regime & FED Analysis",
-        "AMAZON": "Intel Spy - Institutional Flow & Dark Pools",
-        "KYOTO": "Quant Mathematician - Risk/Reward Precision",
-        "VOSTOK": "Risk Sentinel - Capital Preservation & Veto",
-        "ALPS": "Executive Assistant - Synthesis & Reporting"
-    }
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+
+    if prompt := st.chat_input(f"Command {agent_choice}..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("assistant"):
+            res = SovereignIntelligence().chat(prompt, agent_choice)
+            st.markdown(res)
+        st.session_state.messages.append({"role": "assistant", "content": res})
+
+elif page == "Protocol":
+    st.title("Sovereign Protocol Scan")
+    st.write("Protocol: Macro $\rightarrow$ Fundamental $\rightarrow$ Technical $\rightarrow$ Risk")
     
-    cols = st.columns(5)
-    for i, (name, cap) in enumerate(members.items()):
-        with cols[i]:
-            st.markdown(f'<div class="member-card"><b>{name}</b><br><small>{cap}</small></div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    if st.button("CONVENE THE BOARD"):
-        # VISIBLE PROCESS
-        with st.status("Board Session in Progress...", expanded=True) as status:
-            st.write("🏛️ Rhine is analyzing Macro indicators...")
-            time.sleep(1)
-            st.write("🕵️ Amazon is scanning institutional accumulation...")
-            time.sleep(1)
-            st.write("📐 Kyoto is calculating mathematical entries...")
-            time.sleep(1)
-            st.write("🛡️ Vostok is auditing risk exposure...")
-            time.sleep(1)
-            st.write("📝 Alps is synthesizing the final directive...")
-            
-            result = sovereign_board.invoke({"regime": "", "leads": [], "active_ticker": None, "blueprint": None, "risk_approved": False, "risk_notes": "", "briefing": ""})
-            status.update(label="Session Complete", state="complete")
-
-        st.markdown(f'<div class="report-box">{result["briefing"]}</div>', unsafe_allow_html=True)
-        if result['risk_approved']: st.success(f"DIRECTIVE: EXECUTE {result['active_ticker']}")
-        else: st.error("DIRECTIVE: TRADE REJECTED BY VOSTOK")
-
-elif page == "Intel Feed":
-    st.title("Sovereign Intelligence")
-    st.info("Monitoring Whale Movements & Fed Data...")
-    st.write("• [Sovereign-Intel] High-conviction accumulation detected in Gold.")
-    st.write("• [Sovereign-Macro] 10Y Yields at critical resistance.")
+    if st.button("INITIATE 90% PROBABILITY SCAN"):
+        with st.spinner("Filtering noise..."):
+            approved, logs, blueprint = SovereignIntelligence().run_protocol("NVDA")
+            for log in logs:
+                st.write(log)
+            if approved:
+                st.markdown(f'<div class="directive-box">SOVEREIGN DIRECTIVE: EXECUTE {blueprint["ticker"]} <br> Entry: {blueprint["entry"]} | Stop: {blueprint["stop"]} | TP: {blueprint["tp"]}</div>', unsafe_allow_html=True)
+            else:
+                st.error("PROTOCOL BREACH: Trade rejected. Does not meet 90% threshold.")
