@@ -1,0 +1,45 @@
+import os
+from huggingface_hub import InferenceClient # HuggingFace Client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class SovereignRisk:
+    def __init__(self):
+        # We use FinBERT via HuggingFace for bank-grade sentiment analysis
+        self.hf_client = InferenceClient(token=os.getenv("HUGGINGFACE_TOKEN"))
+        self.model_id = "ProsusAI/finbert" 
+        self.max_risk_per_trade = 0.015  # 1.5% Max Risk
+
+    def check_sentiment_danger(self, news_text):
+        """Uses HuggingFace FinBERT to detect extreme negative sentiment."""
+        # FinBERT returns: Positive, Negative, or Neutral
+        result = self.hf_client.text_classification(news_text, model=self.model_id)
+        sentiment = result[0]['label']
+        score = result[0]['score']
+        
+        if sentiment == "negative" and score > 0.8:
+            return "🚨 HIGH DANGER: Extreme negative sentiment detected."
+        return "✅ Sentiment Clear."
+
+    def validate_trade(self, account_balance, trade_amount, stop_loss_pct):
+        """Hard-coded risk math to protect the $4,800 account."""
+        risk_amount = account_balance * stop_loss_pct
+        actual_risk = trade_amount * stop_loss_pct
+        
+        if actual_risk > (account_balance * self.max_risk_per_trade):
+            return f"❌ VETO: Risk too high. Trade risks ${actual_risk}, max allowed is ${risk_amount}."
+        
+        return "✅ Risk Parameters Validated."
+
+# --- TEST THE SENTINEL ---
+if __name__ == "__main__":
+    sentinel = SovereignRisk()
+    
+    # Test 1: Sentiment Check (HuggingFace)
+    news = "Central bank warns of imminent liquidity crisis and sudden market crash."
+    print(f"Sentiment Analysis: {sentinel.check_sentiment_danger(news)}")
+    
+    # Test 2: Capital Risk Check (Math)
+    # Scenario: Trying to risk 5% of the account on one trade
+    print(f"Capital Check: {sentinel.validate_trade(4800, 2000, 0.05)}") 

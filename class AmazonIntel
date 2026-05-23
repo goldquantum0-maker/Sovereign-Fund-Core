@@ -1,0 +1,64 @@
+from huggingface_hub import InferenceClient
+from serpapi import GoogleSearch
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class SovereignIntel:
+    """The Spy: Finds high-probability trades based on the Macro Regime."""
+    def __init__(self):
+        self.serp_key = os.getenv("SERPAPI_KEY")
+        self.hf_client = InferenceClient(token=os.getenv("HUGGINGFACE_TOKEN"))
+        self.finbert_model = "ProsusAI/finbert"
+
+    def get_sentiment(self, text):
+        """Analyzes news sentiment using bank-grade FinBERT."""
+        result = self.hf_client.text_classification(text, model=self.finbert_model)
+        return result[0]['label'], result[0]['score']
+
+    def scout_trades(self, regime):
+        """
+        Searches for assets based on the Macro Regime.
+        """
+        # Define search keywords based on the regime
+        if "🔴 RISK-OFF" in regime:
+            search_query = "institutional accumulation gold treasury bonds defensive stocks 13F"
+        elif "🟢 RISK-ON" in regime:
+            search_query = "institutional accumulation AI tech growth stocks dark pool 13F"
+        else:
+            search_query = "top institutional buys blue chip value stocks 13F"
+
+        print(f"Spy: Regime is {regime}. Searching for: {search_query}...")
+        
+        search = GoogleSearch("Sovereign-Intel", "apiKey", self.serp_key)
+        results = search.get_dict()
+        
+        # Extract the top 3 most relevant snippets
+        snippets = [res['snippet'] for res in results.get('organic_results', [])[:3]]
+        
+        findings = []
+        for text in snippets:
+            sentiment, score = self.get_sentiment(text)
+            if sentiment == "positive" and score > 0.75:
+                findings.append(f"💎 HIGH PROBABILITY: {text} (Score: {score:.2f})")
+        
+        return findings if findings else ["⚪ No high-conviction trades found today."]
+
+# --- INTEGRATED EXECUTION (Macro -> Intel) ---
+if __name__ == "__main__":
+    # 1. The Architect sets the law
+    architect = SovereignMacro()
+    current_regime = architect.determine_regime()
+    print(f"\nArchitect says: {current_regime}")
+
+    # 2. The Spy finds the trade based on that law
+    spy = SovereignIntel()
+    trade_leads = spy.scout_trades(current_regime)
+
+    print("\n" + "="*50)
+    print("🕵️ SOVEREIGN-INTEL TRADE LEADS 🕵️")
+    print("="*50)
+    for lead in trade_leads:
+        print(lead)
+    print("="*50)
